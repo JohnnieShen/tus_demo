@@ -31,6 +31,7 @@ class TusUploadWorker(
         const val KEY_URI = "uri"
         const val KEY_ENDPOINT = "endpoint"
         const val KEY_FINGERPRINT = "fingerprint"
+        const val KEY_CONVERT_TO_PNG = "convert_to_png"
 
         const val KEY_UPLOAD_URL = "upload_url"
 
@@ -45,28 +46,30 @@ class TusUploadWorker(
     override suspend fun doWork(): Result {
         val uriString = inputData.getString(KEY_URI) ?: return Result.failure()
         val endpoint = inputData.getString(KEY_ENDPOINT) ?: return Result.failure()
+        val convertPng = inputData.getBoolean(KEY_CONVERT_TO_PNG, false)
         val imageUri = uriString.toUri()
 
         return try {
-            val pngFile = prepareFile(appContext.contentResolver, imageUri)
+            val (fileToUpload, contentType) = prepareFile(appContext.contentResolver, imageUri, convertPng)
 
             val client = TusClient().apply {
                 setUploadCreationURL(URL(endpoint))
-                enableResuming(TusPreferencesURLStore(appContext.getSharedPreferences("tus_worker", Context.MODE_PRIVATE)))
+                enableResuming(
+                    TusPreferencesURLStore(appContext.getSharedPreferences("tus_worker", Context.MODE_PRIVATE))
+                )
                 setHeaders(mapOf("Content-Type" to "application/offset+octet-stream"))
             }
 
             val uniqueFingerprint = inputData.getString(KEY_FINGERPRINT)
-                ?: (pngFile.absolutePath + "#" + uriString)
+                ?: (fileToUpload.absolutePath + "#" + uriString)
 
-            val upload = TusUpload(pngFile).apply {
+            val upload = TusUpload(fileToUpload).apply {
                 fingerprint = uniqueFingerprint
                 setMetadata(mapOf(
-                    "filename" to pngFile.name,
-                    "contentType" to "image/png"
+                    "filename"    to fileToUpload.name,
+                    "contentType" to contentType
                 ))
             }
-            Log.d("TusUploadWorker", "Starting/Resuming upload for ${pngFile.name}")
 
             val uploader = client.resumeOrCreateUpload(upload).apply {
                 setChunkSize(CHUNK_SIZE * 1024)
@@ -113,23 +116,32 @@ class TusUploadWorker(
         }
     }
 
-    private suspend fun prepareFile(resolver: ContentResolver, uri: Uri): File {
-        return withContext(Dispatchers.IO) {
-            val safeFileName = "work_upload_${uri.lastPathSegment?.replace(Regex("[^a-zA-Z0-9.-]"), "_")}.png"
-            val pngFile = File(appContext.cacheDir, safeFileName)
-
-            if (!pngFile.exists()) {
-                val inputStream = resolver.openInputStream(uri)
-                    ?: throw IOException("Cannot open URI for reading: $uri")
-
-                val bitmap = BitmapFactory.decodeStream(inputStream)
-                inputStream.close()
-
-                FileOutputStream(pngFile).use { out ->
-                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-                }
+    private suspend fun prepareFile(
+        resolver: ContentResolver,
+        uri: Uri,
+        convertToPng: Boolean
+    ): Pair<File, String> = withContext(Dispatchers.IO) {
+        val originalType = resolver.getType(uri) ?: "application/octet-stream"
+        val ext = when (originalType) {
+            "image/png"  -> "png"
+            "image/jpeg" -> "jpg"
+            else -> uri.lastPathSegment?.substringAfterLast('.') ?: ""
+        }
+        Log.d("tus demo", "convert: $convertToPng")
+        return@withContext if (convertToPng) {
+            val bmp = resolver.openInputStream(uri)!!.use(BitmapFactory::decodeStream)
+            val outFile = File(appContext.cacheDir, "upload_${System.currentTimeMillis()}.png")
+            FileOutputStream(outFile).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            outFile to "image/png"
+        } else {
+            val inStream = resolver.openInputStream(uri)
+                ?: throw IOException("Cannot open URI: $uri")
+            val outFile = File(appContext.cacheDir, "upload_${System.currentTimeMillis()}.$ext")
+            FileOutputStream(outFile).use { sink ->
+                inStream.copyTo(sink)
             }
-            pngFile
+            inStream.close()
+            outFile to originalType
         }
     }
 }

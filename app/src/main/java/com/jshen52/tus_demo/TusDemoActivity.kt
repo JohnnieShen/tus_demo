@@ -8,6 +8,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -21,6 +22,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -30,6 +32,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
@@ -64,6 +67,7 @@ class TusDemoActivity : ComponentActivity() {
             var progress by remember { mutableStateOf(0f) }
             var statusMessage by remember { mutableStateOf("") }
             var workId by remember { mutableStateOf<UUID?>(null) }
+            var convertToPng   by remember { mutableStateOf(false) }
 
             var testResult by remember { mutableStateOf("") }
             val pickImageLauncher = rememberLauncherForActivityResult(
@@ -108,6 +112,18 @@ class TusDemoActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxWidth()
                     )
 
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Convert to PNG")
+                        Switch(
+                            checked = convertToPng,
+                            onCheckedChange = { convertToPng = it }
+                        )
+                    }
+
                     Button(
                         onClick = { pickImageLauncher.launch("image/*") },
                         modifier = Modifier.fillMaxWidth()
@@ -132,7 +148,7 @@ class TusDemoActivity : ComponentActivity() {
                     } else {
                         Button(
                             onClick = {
-                                val workRequest = createWorkRequest(pickedImageUri!!, endpoint)
+                                val workRequest = createWorkRequest(pickedImageUri!!, endpoint, convertToPng)
                                 workId = workRequest.id
                                 WorkManager.getInstance(applicationContext).enqueue(workRequest)
                             },
@@ -251,13 +267,14 @@ class TusDemoActivity : ComponentActivity() {
         }
     }
 
-    private fun createWorkRequest(uri: Uri, endpoint: String): OneTimeWorkRequest {
+    private fun createWorkRequest(uri: Uri, endpoint: String, convertToPng: Boolean): OneTimeWorkRequest {
         val fingerprint = uri.lastPathSegment + "#" + UUID.randomUUID()
 
         val inputData = workDataOf(
             TusUploadWorker.KEY_URI to uri.toString(),
             TusUploadWorker.KEY_ENDPOINT to endpoint,
-            TusUploadWorker.KEY_FINGERPRINT to fingerprint
+            TusUploadWorker.KEY_FINGERPRINT to fingerprint,
+            TusUploadWorker.KEY_CONVERT_TO_PNG to convertToPng
         )
 
         return OneTimeWorkRequestBuilder<TusUploadWorker>()
